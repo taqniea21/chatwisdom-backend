@@ -7,24 +7,20 @@ const ALLOWED_ORIGINS = new Set([
 export function withCors(req, res) {
   const origin = req.headers.origin;
 
-  // Always set CORS headers
+  // Always send CORS headers
   if (origin && ALLOWED_ORIGINS.has(origin)) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Vary", "Origin");
   } else {
-    // Safe fallback for requests without Origin header
-    // (or you can set a default allowed origin)
+    // fallback (safe for your case)
     res.setHeader("Access-Control-Allow-Origin", "https://chat-wisdom-ai.base44.app");
     res.setHeader("Vary", "Origin");
   }
 
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  res.setHeader(
-    "Access-Control-Allow-Headers",
-    "Content-Type, Authorization"
-  );
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
 
-  // Preflight request must end here
+  // ✅ Preflight must stop here
   if (req.method === "OPTIONS") {
     res.statusCode = 204;
     res.end();
@@ -42,7 +38,7 @@ export async function readJson(req) {
       if (!data) return resolve({});
       try {
         resolve(JSON.parse(data));
-      } catch (e) {
+      } catch {
         reject(new Error("Invalid JSON body"));
       }
     });
