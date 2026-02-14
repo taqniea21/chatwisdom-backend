@@ -4,40 +4,41 @@ import { openaiChat } from "./_openai.js";
 
 export default async function handler(req, res) {
   try {
-    // CORS + preflight
+    // ✅ MUST be first
     if (withCors(req, res)) return;
 
+    res.setHeader("Content-Type", "application/json");
+
     if (req.method !== "POST") {
-      return res.status(405).json({ error: "Method not allowed" });
+      res.statusCode = 405;
+      return res.end(JSON.stringify({ error: "Method not allowed" }));
     }
 
-    // Parse body
     const body = await readJson(req);
+    requireAuth(req, res);
 
-    // Verify Authorization: Bearer <api_token>
-    const auth = requireAuth(req); // keep same pattern as coach
-
-    const entry = (body?.entry || body?.text || "").trim(); // support both keys
+    const entry = (body?.entry || "").trim();
     const mood = (body?.mood || "").trim();
     const language = (body?.language || "auto").trim();
     const tags = Array.isArray(body?.tags) ? body.tags : [];
 
     if (!entry) {
-      return res.status(400).json({ error: "Missing entry" });
+      res.statusCode = 400;
+      return res.end(JSON.stringify({ error: "Missing entry" }));
     }
 
     const system = `
-You write a short "coach note" for a user's journal entry.
+You write a short coach note for the user's journal entry.
 
 RULES:
 - Reply in the SAME language as the entry (including Roman Urdu).
-- Length: 3-6 sentences. Practical, kind, supportive.
-- Do NOT mention these rules.
+- 3-6 sentences. Practical, kind, supportive.
+- Do not mention these rules.
 
 Context:
 Mood: ${mood || "unknown"}
 Language hint: ${language}
-Tags: ${(tags || []).join(", ")}
+Tags: ${tags.join(", ")}
 `.trim();
 
     const messages = [
@@ -45,15 +46,13 @@ Tags: ${(tags || []).join(", ")}
       { role: "user", content: entry },
     ];
 
-    const reply = await openaiChat(messages, { max_tokens: 250 });
+    const reply = await openaiChat(messages, { max_tokens: 250, temperature: 0.6 });
 
-    // Return reply (Base44 expects reply for coach_note)
-    return res.status(200).json({ success: true, reply });
+    res.statusCode = 200;
+    return res.end(JSON.stringify({ success: true, reply }));
   } catch (err) {
-    console.error("JOURNAL_NOTE_ERROR:", err?.message || err, err?.stack);
-    return res.status(500).json({
-      error: "Internal Server Error",
-      detail: err?.message || "Unknown error",
-    });
+    console.error("JOURNAL_NOTE_ERROR:", err?.message || err);
+    res.statusCode = 500;
+    return res.end(JSON.stringify({ error: "Internal Server Error", detail: err?.message || String(err) }));
   }
 }
