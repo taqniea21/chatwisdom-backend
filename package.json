@@ -1,0 +1,6 @@
+{
+  "name": "chatwisdom-backend",
+  "private": true,
+  "type": "module",
+  "engines": { "node": "18.x" }
+}
