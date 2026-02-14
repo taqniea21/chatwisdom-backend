@@ -1,45 +1,43 @@
 import { withCors, readJson } from "./_cors.js";
 import { requireAuth } from "./_auth.js";
-import { openaiChat, buildJournalSystemPrompt } from "./_openai.js";
+import { openaiChat } from "./_openai.js";
 
 export default async function handler(req, res) {
   try {
-    res.setHeader("Content-Type", "application/json");
     if (withCors(req, res)) return;
 
     if (req.method !== "POST") {
       return res.status(405).json({ error: "Method not allowed" });
     }
 
-    // auth (must NOT block OPTIONS; OPTIONS already returned above)
-    if (!requireAuth(req, res)) return;
+    requireAuth(req);
 
     const body = await readJson(req);
     const entry = String(body?.entry || "").trim();
     const mood = String(body?.mood || "").trim();
+    const language = String(body?.language || "auto").trim();
+    const tags = Array.isArray(body?.tags) ? body.tags : [];
 
-    if (!entry) {
-      return res.status(400).json({ error: "Missing entry" });
-    }
+    if (!entry) return res.status(400).json({ error: "Missing entry" });
 
-    const system = buildJournalSystemPrompt(entry, mood, `
-Return a coach note that:
-- validates feelings
-- 1-2 practical next steps
-- ends with one gentle question
-    `.trim());
+    const system = `
+Write a short coach note for a journal entry.
+Reply in the SAME language as the entry. If entry is English, reply in English.
+Length 3-6 sentences. Practical, kind, supportive.
+Mood: ${mood || "unknown"}
+Tags: ${tags.join(", ")}
+Language hint: ${language}
+`.trim();
 
-    const messages = [
+    const reply = await openaiChat([
       { role: "system", content: system },
       { role: "user", content: entry },
-    ];
+    ]);
 
-    const note = await openaiChat({ messages, temperature: 0.5 });
-
-    return res.status(200).json({ success: true, note });
+    return res.status(200).json({ success: true, reply });
   } catch (err) {
-    console.error("JOURNAL_NOTE_ERROR:", err?.message || err, err?.stack);
-    return res.status(500).json({
+    console.error("JOURNAL_NOTE_ERROR:", err?.message || err);
+    return res.status(err?.status || 500).json({
       error: "Internal Server Error",
       detail: err?.message || "Unknown error",
     });
