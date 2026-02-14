@@ -1,10 +1,16 @@
-export function requireAuth(req) {
-  const h = req.headers?.authorization || "";
-  const m = h.match(/^Bearer\s+(.+)$/i);
-  if (!m) {
-    const e = new Error("Missing Authorization Bearer token");
-    e.status = 401;
-    throw e;
+export function requireAuth(req, res) {
+  const header = req.headers.authorization || "";
+  const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+
+  if (!token) {
+    if (res) {
+      res.statusCode = 401;
+      res.end(JSON.stringify({ error: "Missing Authorization Bearer token" }));
+    }
+    throw new Error("Missing Authorization token");
   }
-  return m[1]; // api_token (you can validate later)
+
+  // For now we only validate token exists.
+  // Later you can verify it against Base44 UserProfile if needed.
+  return { token };
 }
