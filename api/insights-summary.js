@@ -1,80 +1,106 @@
 import { withCors, readJson } from "./_cors.js";
 import { requireAuth } from "./_auth.js";
-import { openaiChat } from "./_openai.js";
+import { openaiChat, detectLangPublic } from "./_openai.js";
+
+function computeMoodStats(entries = []) {
+  const counts = {};
+  for (const e of entries) {
+    const mood = String(e?.mood || "unknown");
+    counts[mood] = (counts[mood] || 0) + 1;
+  }
+  const total = entries.length;
+  let topMood = "unknown";
+  let topMoodCount = 0;
+  for (const k of Object.keys(counts)) {
+    if (counts[k] > topMoodCount) {
+      topMood = k;
+      topMoodCount = counts[k];
+    }
+  }
+  return { total, counts, topMood, topMoodCount };
+}
 
 export default async function handler(req, res) {
   try {
-    // ✅ MUST be first
+    res.setHeader("Content-Type", "application/json");
     if (withCors(req, res)) return;
 
-    res.setHeader("Content-Type", "application/json");
-
     if (req.method !== "POST") {
-      res.statusCode = 405;
-      return res.end(JSON.stringify({ error: "Method not allowed" }));
+      return res.status(405).json({ error: "Method not allowed" });
     }
+
+    if (!requireAuth(req, res)) return;
 
     const body = await readJson(req);
-    requireAuth(req, res);
-
     const entries = Array.isArray(body?.entries) ? body.entries : [];
-    const language = (body?.language || "auto").trim();
 
-    if (!entries.length) {
-      res.statusCode = 400;
-      return res.end(JSON.stringify({ error: "Missing entries" }));
+    if (entries.length === 0) {
+      return res.status(400).json({ error: "Missing entries" });
     }
 
-    const lines = entries.slice(0, 20).map((e, i) => {
-      const text = String(e?.entry || "").trim();
-      const mood = String(e?.mood || "").trim();
-      const tags = Array.isArray(e?.tags) ? e.tags.join(", ") : "";
-      const dt = String(e?.created_at || "").trim();
-      return `#${i + 1}${dt ? ` (${dt})` : ""}\nMood: ${mood || "unknown"}\nTags: ${tags || "-"}\nEntry: ${text}\n`;
-    });
+    // build compact text for LLM
+    const rows = entries
+      .slice(0, 30)
+      .map((e, idx) => {
+        const dt = e?.created_at ? String(e.created_at) : "";
+        const mood = e?.mood ? String(e.mood) : "unknown";
+        const entry = String(e?.entry || "").replace(/\s+/g, " ").trim();
+        return `${idx + 1}) [${dt}] mood=${mood} entry="${entry}"`;
+      })
+      .join("\n");
+
+    const stats = computeMoodStats(entries);
+
+    // choose language based on majority of entries text
+    const sampleText = entries.map(e => e?.entry || "").join(" ").slice(0, 2000);
+    const lang = detectLangPublic(sampleText);
+
+    const langRule =
+      lang === "ur"
+        ? "Write ONLY in Urdu (اردو) script. Do NOT use Roman Urdu."
+        : lang === "roman_ur"
+        ? "Write ONLY in Roman Urdu."
+        : "Write ONLY in English.";
 
     const system = `
-You are ChatWisdom Insights.
+You are ChatWisdom analytics assistant.
+${langRule}
 
-RULES:
-- Reply in the SAME language as the entries (including Roman Urdu).
-- Output MUST be valid JSON with keys: summary, themes, actions
-- No markdown, no extra keys.
+You must produce JSON ONLY (no markdown).
+Return:
+{
+  "summary": "2-4 sentences",
+  "patterns": ["...","...","..."],
+  "mood_overview": {
+    "top_mood": "${stats.topMood}",
+    "counts": ${JSON.stringify(stats.counts)}
+  },
+  "actions": ["3 concrete next steps"],
+  "reflection_questions": ["2 questions"]
+}
 
-Language hint: ${language}
-`.trim();
+Notes:
+- Use the provided mood counts; don't invent numbers.
+- Patterns should reference what user wrote (work stress, sleep, etc.).
+    `.trim();
 
     const messages = [
       { role: "system", content: system },
-      { role: "user", content: `Entries:\n\n${lines.join("\n")}` },
+      {
+        role: "user",
+        content: `Entries:\n${rows}\n\nMood stats: ${JSON.stringify(stats)}`,
+      },
     ];
 
-    const raw = await openaiChat(messages, { temperature: 0.4, max_tokens: 500 });
+    const out = await openaiChat({ messages, temperature: 0.3 });
 
-    let parsed;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      const s = raw.indexOf("{");
-      const e = raw.lastIndexOf("}");
-      if (s !== -1 && e !== -1) parsed = JSON.parse(raw.slice(s, e + 1));
-    }
-
-    if (!parsed) {
-      res.statusCode = 500;
-      return res.end(JSON.stringify({ error: "Bad AI response", raw: raw.slice(0, 400) }));
-    }
-
-    res.statusCode = 200;
-    return res.end(JSON.stringify({
-      success: true,
-      summary: String(parsed.summary || "").trim(),
-      themes: Array.isArray(parsed.themes) ? parsed.themes : [],
-      actions: Array.isArray(parsed.actions) ? parsed.actions : [],
-    }));
+    // If model returns non-JSON sometimes, still pass through (frontend can handle)
+    return res.status(200).json({ success: true, result: out });
   } catch (err) {
-    console.error("INSIGHTS_ERROR:", err?.message || err);
-    res.statusCode = 500;
-    return res.end(JSON.stringify({ error: "Internal Server Error", detail: err?.message || String(err) }));
+    console.error("INSIGHTS_ERROR:", err?.message || err, err?.stack);
+    return res.status(500).json({
+      error: "Internal Server Error",
+      detail: err?.message || "Unknown error",
+    });
   }
 }
