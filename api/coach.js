@@ -1,40 +1,44 @@
-import { setCors } from "./_cors.js";
+import { withCors, readJson } from "./_cors.js";
 import { requireAuth } from "./_auth.js";
-import { callOpenAI } from "./_openai.js";
+import { openaiChat } from "./_openai.js";
 
 export default async function handler(req, res) {
-  res.setHeader("Content-Type", "application/json");
-  if (setCors(req, res)) return;
-
-  if (req.method !== "POST") {
-    res.statusCode = 405;
-    return res.end(JSON.stringify({ error: "Method not allowed" }));
-  }
-
-  if (!requireAuth(req, res)) return;
-
-  const { message, language = "auto", mode = "coach" } = req.body || {};
-  if (!message) {
-    res.statusCode = 400;
-    return res.end(JSON.stringify({ error: "Missing message" }));
-  }
-
-  const system = `
-You are ChatWisdom: a calm, supportive coaching assistant.
-RULE: Reply in the SAME language as the user's latest message.
-If the user's message is Roman Urdu, reply in Roman Urdu.
-Keep tone warm and coach-like. If user wrote long message, reply with a longer helpful answer.
-
-Mode: ${mode}
-Language hint: ${language}
-`.trim();
-
   try {
-    const reply = await callOpenAI({ system, user: message });
-    res.statusCode = 200;
-    return res.end(JSON.stringify({ reply }));
-  } catch (e) {
-    res.statusCode = 500;
-    return res.end(JSON.stringify({ error: String(e.message || e) }));
+    // CORS + preflight
+    if (withCors(req, res)) return;
+
+    if (req.method !== "POST") {
+      return res.status(405).json({ error: "Method not allowed" });
+    }
+
+    // ✅ IMPORTANT: parse body manually
+    const body = await readJson(req);
+
+    // ✅ Verify Authorization: Bearer <api_token>
+    const auth = requireAuth(req);
+
+    const message = (body?.message || "").trim();
+    const history = Array.isArray(body?.history) ? body.history : [];
+
+    if (!message) {
+      return res.status(400).json({ error: "Missing message" });
+    }
+
+    // Build messages for OpenAI
+    const messages = [
+      { role: "system", content: "You are ChatWisdom, a helpful motivational coach." },
+      ...history.map(m => ({ role: m.role, content: String(m.content || "") })),
+      { role: "user", content: message }
+    ];
+
+    const reply = await openaiChat(messages);
+
+    return res.status(200).json({ success: true, reply });
+  } catch (err) {
+    console.error("COACH_ERROR:", err?.message || err, err?.stack);
+    return res.status(500).json({
+      error: "Internal Server Error",
+      detail: err?.message || "Unknown error"
+    });
   }
 }
