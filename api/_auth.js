@@ -1,19 +1,10 @@
-export function requireAuth(req, res) {
-  const hdr = req.headers.authorization || "";
-  const token = hdr.startsWith("Bearer ") ? hdr.slice(7) : "";
-  const expected = process.env.CHATWISDOM_API_TOKEN;
-
-  if (!expected) {
-    res.statusCode = 500;
-    res.end(JSON.stringify({ error: "Server missing CHATWISDOM_API_TOKEN" }));
-    return null;
+export function requireAuth(req) {
+  const h = req.headers?.authorization || "";
+  const m = h.match(/^Bearer\s+(.+)$/i);
+  if (!m) {
+    const e = new Error("Missing Authorization Bearer token");
+    e.status = 401;
+    throw e;
   }
-
-  if (!token || token !== expected) {
-    res.statusCode = 401;
-    res.end(JSON.stringify({ error: "Unauthorized" }));
-    return null;
-  }
-
-  return { ok: true };
+  return m[1]; // api_token (you can validate later)
 }
